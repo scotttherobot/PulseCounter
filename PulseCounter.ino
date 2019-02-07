@@ -106,7 +106,7 @@ void setupMqtt() {
   // Set up MQTT
   client.setServer(mqttServer, mqttPort);
   client.setCallback(mqttCallback);
-  
+
   while (!client.connected()) {
     lcdmsg("Connecting to MQTT");
 
@@ -127,6 +127,9 @@ void setupMqtt() {
 }
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  // Consider this an interaction and set the backlight timeout
+  lastModeChange = timeClient.getEpochTime();
+
   char* p = (char*)malloc(length + 1);
   // Copy the payload to the new buffer
   memcpy(p,payload,length);
@@ -181,9 +184,6 @@ void setDisplayMode(int mode) {
   if (currentDisplayMode > DM_MAX) {
     currentDisplayMode = 0;
   }
-
-  // reset the backlight timeout
-  lastModeChange = timeClient.getEpochTime();
 }
 
 void publishCount() {
@@ -215,6 +215,7 @@ void loop() {
 //    }
 
     nextDisplayMode();
+
     // Reset the backlight timeout.
     lastModeChange = timeClient.getEpochTime();
   }
