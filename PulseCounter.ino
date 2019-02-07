@@ -177,12 +177,19 @@ void setDisplayMode(int mode) {
   }
 }
 
+void publishCount() {
+  char countstr[4];
+  sprintf(countstr, "%d", numPulses);
+  client.publish(countTopic, countstr);
+}
+
 void loop() {
 
   // Handle queued interrupts for pulses
   if (rawPulseCounter > 0) {
     rawPulseCounter--;
     numPulses++;
+    publishCount();
   }
 
   // Handle requests to change display mode
