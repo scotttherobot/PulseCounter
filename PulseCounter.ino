@@ -18,6 +18,8 @@
 #define DM_MQTT 3
 #define DM_MAX 3
 
+#define COUNTER_ID "1"
+
 const byte pulsePin = D7;
 const byte modePin = D6;
 volatile byte rawPulseCounter = 0;
@@ -31,11 +33,11 @@ const int mqttPort = 1883;
 const char* mqttUser = "automation";
 const char* mqttPass = "anncoulter";
 
-const char* statusTopic = "pulse/1/available";
-const char* subscribeTopic = "pulse/1/#";
-const char* countTopic = "pulse/1/count";
-const char* setCountTopic = "pulse/1/setcount";
-const char* setModeTopic = "pulse/1/setmode";
+const char* statusTopic = "pulse/"COUNTER_ID"/available";
+const char* subscribeTopic = "pulse/"COUNTER_ID"/#";
+const char* countTopic = "pulse/"COUNTER_ID"/count";
+const char* setCountTopic = "pulse/"COUNTER_ID"/setcount";
+const char* setModeTopic = "pulse/"COUNTER_ID"/setmode";
 
 void mqttCallback(char* topic, byte* payload, unsigned int length);
 
