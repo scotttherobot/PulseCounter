@@ -12,6 +12,8 @@
 #define AUTO_INCREMENT_DM 1
 #define AUTO_INCREMENT_SECONDS 5
 
+#define BACKLIGHT_TIMEOUT 30
+
 #define DM_COUNT 0
 #define DM_TIME 1
 #define DM_WIFI 2
@@ -25,6 +27,8 @@ const byte modePin = D6;
 volatile byte rawPulseCounter = 0;
 volatile byte rawModeCounter = 0;
 int numPulses = 0;
+
+unsigned long lastModeChange = 0;
 
 int currentDisplayMode = DM_COUNT;
 
@@ -60,6 +64,7 @@ void setup() {
   setupMqtt();
   // Clear all the setup junk away
   lcd.clear();
+  lastModeChange = timeClient.getEpochTime();
 }
 
 void setupInterrupts() {
@@ -171,10 +176,14 @@ void nextDisplayMode() {
 void setDisplayMode(int mode) {
   currentDisplayMode = mode;
   lcdClearLine(0);
+  lcd.backlight();
   lcdClearLine(1);
   if (currentDisplayMode > DM_MAX) {
     currentDisplayMode = 0;
   }
+
+  // reset the backlight timeout
+  lastModeChange = timeClient.getEpochTime();
 }
 
 void publishCount() {
@@ -195,8 +204,19 @@ void loop() {
   // Handle requests to change display mode
   if (rawModeCounter > 0) {
     rawModeCounter --;
-    // change mode
+
+    // If the backlight is on, consider this a press
+//    if (lcd._backlightval) {
+//      // Change mode
+//      nextDisplayMode();
+//    } else {
+//      // If the backlight is off, turn the backlight on
+//      lcd.backlight();
+//    }
+
     nextDisplayMode();
+    // Reset the backlight timeout.
+    lastModeChange = timeClient.getEpochTime();
   }
   
   // Check wifi health and re-join if we need to
@@ -281,11 +301,16 @@ void loop() {
 
   // every 2 seconds, change display mode
   static unsigned long lastRefreshTime = 0;
-  if(timeClient.getEpochTime() - lastRefreshTime >= AUTO_INCREMENT_SECONDS)
-  {
+  if (timeClient.getEpochTime() - lastRefreshTime >= AUTO_INCREMENT_SECONDS) {
     lastRefreshTime = timeClient.getEpochTime();
     if (AUTO_INCREMENT_DM) {
       nextDisplayMode();
     }
+  }
+  // Check if the backlight should be on or off
+  if (timeClient.getEpochTime() - lastModeChange >= BACKLIGHT_TIMEOUT) {
+    lcd.noBacklight();
+  } else {
+    lcd.backlight();
   }
 }
