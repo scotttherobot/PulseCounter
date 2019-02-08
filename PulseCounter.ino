@@ -12,7 +12,11 @@
 #define AUTO_INCREMENT_DM 1
 #define AUTO_INCREMENT_SECONDS 5
 
+// Interval to turn the backlight off
 #define BACKLIGHT_TIMEOUT 30
+
+// Interval to publish an "online" message
+#define HEALTHCHECK_TIMEOUT 60
 
 #define DM_COUNT 0
 #define DM_TIME 1
@@ -20,7 +24,8 @@
 #define DM_MQTT 3
 #define DM_MAX 3
 
-#define COUNTER_ID "1"
+#define DEVICE_ID "1"
+#define DEVICE_NAME "pulse"
 
 const byte pulsePin = D7;
 const byte modePin = D6;
@@ -29,6 +34,7 @@ volatile byte rawModeCounter = 0;
 int numPulses = 0;
 
 unsigned long lastModeChange = 0;
+unsigned long lastHealthcheck = 0;
 
 int currentDisplayMode = DM_COUNT;
 
@@ -37,11 +43,12 @@ const int mqttPort = 1883;
 const char* mqttUser = "automation";
 const char* mqttPass = "anncoulter";
 
-const char* statusTopic = "pulse/"COUNTER_ID"/available";
-const char* subscribeTopic = "pulse/"COUNTER_ID"/#";
-const char* countTopic = "pulse/"COUNTER_ID"/count";
-const char* setCountTopic = "pulse/"COUNTER_ID"/setcount";
-const char* setModeTopic = "pulse/"COUNTER_ID"/setmode";
+const char* statusTopic = DEVICE_NAME"/"DEVICE_ID"/available";
+const char* subscribeTopic = DEVICE_NAME"/"DEVICE_ID"/#";
+const char* countTopic = DEVICE_NAME"/"DEVICE_ID"/count";
+const char* setCountTopic = DEVICE_NAME"/"DEVICE_ID"/setcount";
+const char* setModeTopic = DEVICE_NAME"/"DEVICE_ID"/setmode";
+const char* jsonInfoTopic = DEVICE_NAME"/"DEVICE_ID"/attributes";
 
 void mqttCallback(char* topic, byte* payload, unsigned int length);
 
@@ -192,6 +199,48 @@ void publishCount() {
   client.publish(countTopic, countstr);
 }
 
+void getFormattedSignalStrength() {
+  if (WiFi.status() != WIFI_CONNECTED) {
+     return -1;
+  }
+
+  int dBm = WiFi.RSSI();
+  if (dBm <= -100) {
+     return 0;
+  }
+  if (dBm >= -50) {
+     return 100;
+  }
+  return 2 * (dBm + 100);
+}
+
+/**
+ * Build and publish a JSON blob with all the attributes
+ * of the device
+ * Attributes:
+ *   DEVICE_NAME
+ *   DEVICE_ID
+ *   IP address
+ *   Wifi RSSI
+ */
+void publishAttributes() {
+  char ipStr[16];
+  sprintf(ipStr, "IP:%d.%d.%d.%d", WiFi.localIP()[0], WiFi.localIP()[1], WiFi.localIP()[2], WiFi.localIP()[3] );
+
+  String json = String("{");
+         json += "\"device_name\":";
+         json += "\""DEVICE_NAME"\",";
+         json += "\"device_id\":";
+         json += "\""DEVICE_ID"\",";
+         json += "\"ip_address\":\"";
+         json += ipStr;
+         json += "\",\"rssi\":\"";
+         json += getFormattedSignalStrength();
+         json += "\"}";
+
+   client.publish(jsonInfoTopic, json);
+}
+
 void loop() {
 
   // Handle queued interrupts for pulses
@@ -251,7 +300,10 @@ void loop() {
 
   if (currentDisplayMode == DM_WIFI) {
     if (WiFi.status() == WL_CONNECTED) {
-      lcdmsg("WIFI: Connected");
+      String sl = String("Wifi: ");
+      sl += getFormattedSignalStrength();
+      sl += "% ";
+      lcdmsg(sl);
 
       char ipStr[16];
       sprintf(ipStr, "IP:%d.%d.%d.%d", WiFi.localIP()[0], WiFi.localIP()[1], WiFi.localIP()[2], WiFi.localIP()[3] );
@@ -313,5 +365,11 @@ void loop() {
     lcd.noBacklight();
   } else {
     lcd.backlight();
+  }
+
+  // Check if it's time for a healthcheck
+  if (timeClient.getEpochTime() - lastHealthcheck >= HEALTHCHECK_TIMEOUT) {
+     client.publish(statusTopic, "online");
+     lastHealthcheck = timeClient.getEpochTime();
   }
 }
