@@ -11,6 +11,7 @@
 
 #define AUTO_INCREMENT_DM 1
 #define AUTO_INCREMENT_SECONDS 5
+#define AUTO_INCREMENT_PAUSE_SECONDS 30
 
 // Interval to turn the backlight off
 #define BACKLIGHT_TIMEOUT 60
@@ -36,6 +37,7 @@ int numPulses = 0;
 unsigned long lastUserInteraction = 0;
 unsigned long lastHealthcheck = 0;
 unsigned long lastDisplayModeChange = 0;
+int pauseAutoIncrement = 0;
 
 int currentDisplayMode = DM_COUNT;
 
@@ -282,6 +284,8 @@ void loop() {
     // Reset the backlight timeout.
     lastUserInteraction = timeClient.getEpochTime();
     lastDisplayModeChange = timeClient.getEpochTime();
+    // Pause auto increment
+    pauseAutoIncrement = 1;
   }
   
   // Check wifi health and re-join if we need to
@@ -367,13 +371,18 @@ void loop() {
     }
   }
 
-  // every 2 seconds, change display mode
-  if (timeClient.getEpochTime() - lastDisplayModeChange >= AUTO_INCREMENT_SECONDS) {
+  // every x seconds, change display mode unless we're paused
+  if ((timeClient.getEpochTime() - lastDisplayModeChange >= AUTO_INCREMENT_SECONDS)  && !pauseAutoIncrement) {
     lastDisplayModeChange = timeClient.getEpochTime();
     if (AUTO_INCREMENT_DM) {
       nextDisplayMode();
     }
   }
+  // Release the pause if we surpass the override time
+  if ((timeClient.getEpochTime() - lastDisplayModeChange >= AUTO_INCREMENT_PAUSE_SECONDS)  && pauseAutoIncrement) {
+    pauseAutoIncrement = 0;
+  }
+
   // Check if the backlight should be on or off
   if (timeClient.getEpochTime() - lastUserInteraction >= BACKLIGHT_TIMEOUT) {
     lcd.noBacklight();
