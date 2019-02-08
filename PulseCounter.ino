@@ -133,7 +133,7 @@ void setupMqtt() {
     lcdmsg("Connecting to MQTT");
 
     // The "offline" message here is the last will and testament
-    if (client.connect("Pulse1", mqttUser, mqttPass, statusTopic, 1, 1, "offline")) {
+    if (client.connect(DEVICE_NAME""DEVICE_ID, mqttUser, mqttPass, statusTopic, 1, 1, "offline")) {
       lcdmsg("Connected");
       if (client.subscribe(subscribeTopic)) {
         lcdmsg("Subscribed");
