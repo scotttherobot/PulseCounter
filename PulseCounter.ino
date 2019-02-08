@@ -13,7 +13,7 @@
 #define AUTO_INCREMENT_SECONDS 5
 
 // Interval to turn the backlight off
-#define BACKLIGHT_TIMEOUT 30
+#define BACKLIGHT_TIMEOUT 60
 
 // Interval to publish an "online" message
 #define HEALTHCHECK_TIMEOUT 60
@@ -33,8 +33,9 @@ volatile byte rawPulseCounter = 0;
 volatile byte rawModeCounter = 0;
 int numPulses = 0;
 
-unsigned long lastModeChange = 0;
+unsigned long lastUserInteraction = 0;
 unsigned long lastHealthcheck = 0;
+unsigned long lastDisplayModeChange = 0;
 
 int currentDisplayMode = DM_COUNT;
 
@@ -71,7 +72,7 @@ void setup() {
   setupMqtt();
   // Clear all the setup junk away
   lcd.clear();
-  lastModeChange = timeClient.getEpochTime();
+  lastUserInteraction = timeClient.getEpochTime();
 }
 
 void setupInterrupts() {
@@ -83,11 +84,23 @@ void setupInterrupts() {
 }
 
 void handlePulse() {
-  rawPulseCounter++;
+  static unsigned long last_int_time = 0;
+  unsigned long interrupt_time = millis();
+  if (interrupt_time - last_int_time > 200) {
+    rawPulseCounter++;
+  }
+
+  last_int_time = interrupt_time;
 }
 
 void handleMode() {
-  rawModeCounter++;
+  static unsigned long last_int_time = 0;
+  unsigned long interrupt_time = millis();
+  if (interrupt_time - last_int_time > 200) {
+    rawModeCounter++;
+  }
+
+  last_int_time = interrupt_time;
 }
 
 void setupNtp() {
@@ -131,12 +144,10 @@ void setupMqtt() {
     }
   }
   client.publish(statusTopic, "online");
+  publishAttributes();
 }
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  // Consider this an interaction and set the backlight timeout
-  lastModeChange = timeClient.getEpochTime();
-
   char* p = (char*)malloc(length + 1);
   // Copy the payload to the new buffer
   memcpy(p,payload,length);
@@ -147,12 +158,18 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     String a = "";
     a += p;
     numPulses = a.toInt();
+
+    // Consider this an interaction and set the backlight timeout
+    lastUserInteraction = timeClient.getEpochTime();
   }
 
   if (strcmp(topic, setModeTopic) == 0) {
     String a = "";
     a += p;
     setDisplayMode(a.toInt());
+
+    // Consider this an interaction and set the backlight timeout
+    lastUserInteraction = timeClient.getEpochTime();
   }
 }
 
@@ -194,13 +211,18 @@ void setDisplayMode(int mode) {
 }
 
 void publishCount() {
-  char countstr[4];
-  sprintf(countstr, "%d", numPulses);
-  client.publish(countTopic, countstr);
+  String json = String("{");
+         json += "\"count_1\":";
+         json += numPulses;
+         json += "}";
+
+   char jsonChar[200];
+   json.toCharArray(jsonChar, 200);
+   client.publish(countTopic, jsonChar);
 }
 
-void getFormattedSignalStrength() {
-  if (WiFi.status() != WIFI_CONNECTED) {
+double getFormattedSignalStrength() {
+  if (WiFi.status() != WL_CONNECTED) {
      return -1;
   }
 
@@ -225,7 +247,7 @@ void getFormattedSignalStrength() {
  */
 void publishAttributes() {
   char ipStr[16];
-  sprintf(ipStr, "IP:%d.%d.%d.%d", WiFi.localIP()[0], WiFi.localIP()[1], WiFi.localIP()[2], WiFi.localIP()[3] );
+  sprintf(ipStr, "%d.%d.%d.%d", WiFi.localIP()[0], WiFi.localIP()[1], WiFi.localIP()[2], WiFi.localIP()[3] );
 
   String json = String("{");
          json += "\"device_name\":";
@@ -234,11 +256,13 @@ void publishAttributes() {
          json += "\""DEVICE_ID"\",";
          json += "\"ip_address\":\"";
          json += ipStr;
-         json += "\",\"rssi\":\"";
+         json += "\",\"signal_percent\":\"";
          json += getFormattedSignalStrength();
          json += "\"}";
 
-   client.publish(jsonInfoTopic, json);
+   char jsonChar[200];
+   json.toCharArray(jsonChar, 200);
+   client.publish(jsonInfoTopic, jsonChar);
 }
 
 void loop() {
@@ -253,20 +277,11 @@ void loop() {
   // Handle requests to change display mode
   if (rawModeCounter > 0) {
     rawModeCounter --;
-
-    // If the backlight is on, consider this a press
-//    if (lcd._backlightval) {
-//      // Change mode
-//      nextDisplayMode();
-//    } else {
-//      // If the backlight is off, turn the backlight on
-//      lcd.backlight();
-//    }
-
     nextDisplayMode();
 
     // Reset the backlight timeout.
-    lastModeChange = timeClient.getEpochTime();
+    lastUserInteraction = timeClient.getEpochTime();
+    lastDisplayModeChange = timeClient.getEpochTime();
   }
   
   // Check wifi health and re-join if we need to
@@ -306,10 +321,10 @@ void loop() {
       lcdmsg(sl);
 
       char ipStr[16];
-      sprintf(ipStr, "IP:%d.%d.%d.%d", WiFi.localIP()[0], WiFi.localIP()[1], WiFi.localIP()[2], WiFi.localIP()[3] );
+      sprintf(ipStr, "%d.%d.%d.%d", WiFi.localIP()[0], WiFi.localIP()[1], WiFi.localIP()[2], WiFi.localIP()[3] );
       lcd2(ipStr);
     } else {
-      lcdmsg("WIFI: DISCONNECTED");
+      lcdmsg("WIFI: ERROR");
     }
   }
 
@@ -353,15 +368,14 @@ void loop() {
   }
 
   // every 2 seconds, change display mode
-  static unsigned long lastRefreshTime = 0;
-  if (timeClient.getEpochTime() - lastRefreshTime >= AUTO_INCREMENT_SECONDS) {
-    lastRefreshTime = timeClient.getEpochTime();
+  if (timeClient.getEpochTime() - lastDisplayModeChange >= AUTO_INCREMENT_SECONDS) {
+    lastDisplayModeChange = timeClient.getEpochTime();
     if (AUTO_INCREMENT_DM) {
       nextDisplayMode();
     }
   }
   // Check if the backlight should be on or off
-  if (timeClient.getEpochTime() - lastModeChange >= BACKLIGHT_TIMEOUT) {
+  if (timeClient.getEpochTime() - lastUserInteraction >= BACKLIGHT_TIMEOUT) {
     lcd.noBacklight();
   } else {
     lcd.backlight();
@@ -370,6 +384,7 @@ void loop() {
   // Check if it's time for a healthcheck
   if (timeClient.getEpochTime() - lastHealthcheck >= HEALTHCHECK_TIMEOUT) {
      client.publish(statusTopic, "online");
+     publishCount();
      lastHealthcheck = timeClient.getEpochTime();
   }
 }
