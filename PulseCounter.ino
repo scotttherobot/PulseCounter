@@ -111,20 +111,30 @@ void setupNtp() {
 }
 
 void setupWifi() {
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect();
-  delay(100);
-
-  // Set up Wifi
-  WiFi.begin("The Holy Trinity", "yassqueen");
-  while(WiFi.status()  != WL_CONNECTED) {
-    lcdmsg("Connecting to Wifi");
-    delay(500);
+  if (WiFi.status() == WL_CONNECTED) {
+    // Wifi is already good, let's return.
+    return;
+  } else {
+    // Wifi is not good. Set it up.
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect();
+    delay(100);
+  
+    // Set up Wifi
+    WiFi.begin("The Holy Trinity", "yassqueen");
+    while(WiFi.status()  != WL_CONNECTED) {
+      lcdmsg("Connecting to Wifi");
+      delay(500);
+    }
+    lcdmsg("Connected");
   }
-  lcdmsg("Connected");
 }
 
 void setupMqtt() {
+  // Before even attempting to connect to MQTT
+  // We need to make sure that Wifi is healthy.
+  setupWifi();
+  
   // Set up MQTT
   client.setServer(mqttServer, mqttPort);
   client.setCallback(mqttCallback);
@@ -143,6 +153,8 @@ void setupMqtt() {
     } else {    
       lcdmsg("MQTT Failed");
       delay(500);
+      // Something isn't right. Do a Wifi health check.
+      setupWifi();
     }
   }
   client.publish(statusTopic, "online");
