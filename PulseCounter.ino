@@ -23,16 +23,22 @@
 #define DM_TIME 1
 #define DM_WIFI 2
 #define DM_MQTT 3
-#define DM_MAX 3
+#define DM_RELAY 4
+#define DM_MAX 4
 
 #define DEVICE_ID "1"
 #define DEVICE_NAME "pulse"
 
+// The various pins that we use
 const byte pulsePin = D7;
 const byte modePin = D6;
+const byte relay1Pin = D0;
+
+// Some counters/state variables
 volatile byte rawPulseCounter = 0;
 volatile byte rawModeCounter = 0;
 int numPulses = 0;
+bool relay1State = false;
 
 unsigned long lastUserInteraction = 0;
 unsigned long lastHealthcheck = 0;
@@ -52,6 +58,7 @@ const char* countTopic = DEVICE_NAME"/"DEVICE_ID"/count";
 const char* setCountTopic = DEVICE_NAME"/"DEVICE_ID"/setcount";
 const char* setModeTopic = DEVICE_NAME"/"DEVICE_ID"/setmode";
 const char* jsonInfoTopic = DEVICE_NAME"/"DEVICE_ID"/attributes";
+const char* relay1Topic = DEVICE_NAME"/"DEVICE_ID"/relay1";
 
 void mqttCallback(char* topic, byte* payload, unsigned int length);
 
@@ -68,7 +75,7 @@ void setup() {
   lcd.clear();
   lcd.backlight();
 
-  setupInterrupts();
+  setupInterruptsAndPins();
   setupWifi();
   setupNtp();
   setupMqtt();
@@ -77,7 +84,10 @@ void setup() {
   lastUserInteraction = timeClient.getEpochTime();
 }
 
-void setupInterrupts() {
+void setupInterruptsAndPins() {
+  pinMode(relay1Pin, OUTPUT);
+  digitalWrite(relay1Pin, LOW);
+
   pinMode(pulsePin, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(pulsePin), handlePulse, FALLING);
 
@@ -119,7 +129,7 @@ void setupWifi() {
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
     delay(100);
-  
+
     // Set up Wifi
     WiFi.begin("The Holy Trinity", "yassqueen");
     while(WiFi.status()  != WL_CONNECTED) {
@@ -185,6 +195,16 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     // Consider this an interaction and set the backlight timeout
     lastUserInteraction = timeClient.getEpochTime();
   }
+
+  // If it's on the relay topic
+  if (strcmp(topic, relay1Topic) == 0) {
+    if (strcmp(p, "ON") == 0) {
+      relay1State = true;
+    } else {
+      relay1State = false;
+    }
+    publishCount();
+  }
 }
 
 void lcdClearLine(int line) {
@@ -228,6 +248,12 @@ void publishCount() {
   String json = String("{");
          json += "\"count_1\":";
          json += numPulses;
+         json += ",\"relay_1\":";
+         if (relay1State == true) {
+            json += "\"ON\"";
+         } else {
+            json += "\"OFF\"";
+         }
          json += "}";
 
    char jsonChar[200];
@@ -383,6 +409,15 @@ void loop() {
     }
   }
 
+  if (currentDisplayMode == DM_RELAY) {
+    lcdmsg("Relay 1:");
+    if (relay1State == true) {
+      lcd2("ON ");
+    } else {
+      lcd2("OFF");
+    }
+  }
+
   // every x seconds, change display mode unless we're paused
   if ((timeClient.getEpochTime() - lastDisplayModeChange >= AUTO_INCREMENT_SECONDS)  && !pauseAutoIncrement) {
     lastDisplayModeChange = timeClient.getEpochTime();
@@ -407,5 +442,12 @@ void loop() {
      client.publish(statusTopic, "online");
      publishCount();
      lastHealthcheck = timeClient.getEpochTime();
+  }
+
+  // Check if the relay needs to be turned on or off
+  if (relay1State == true) {
+      digitalWrite(relay1Pin, HIGH);
+  } else {
+      digitalWrite(relay1Pin, LOW);
   }
 }
