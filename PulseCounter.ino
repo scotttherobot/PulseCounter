@@ -3,6 +3,8 @@
 #include <PubSubClient.h>
 #include <LiquidCrystal_I2C.h>
 #include "ESP8266WiFi.h"
+#include <ESP8266mDNS.h>
+#include <ArduinoOTA.h>
 
 // PST offset is 8 hours, or -28800
 // Recommended to use 0 if you're using epoch time
@@ -70,7 +72,11 @@ WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, NTP_OFFSET);
 
 void setup() {
-  lcd.begin(16,2);
+  // Start serial for debugging
+  Serial.begin(9600);
+  Serial.setTimeout(50);
+
+  lcd.begin(16, 2);
   lcd.init();
   lcd.clear();
   lcd.backlight();
@@ -82,6 +88,9 @@ void setup() {
   // Clear all the setup junk away
   lcd.clear();
   lastUserInteraction = timeClient.getEpochTime();
+
+  //ArduinoOTA.setHostname("pulseCounter");
+  ArduinoOTA.begin();
 }
 
 void setupInterruptsAndPins() {
@@ -132,7 +141,7 @@ void setupWifi() {
 
     // Set up Wifi
     WiFi.begin("The Holy Trinity", "yassqueen");
-    while(WiFi.status()  != WL_CONNECTED) {
+    while (WiFi.status()  != WL_CONNECTED) {
       lcdmsg("Connecting to Wifi");
       delay(500);
     }
@@ -144,13 +153,19 @@ void setupMqtt() {
   // Before even attempting to connect to MQTT
   // We need to make sure that Wifi is healthy.
   setupWifi();
-  
+
   // Set up MQTT
   client.setServer(mqttServer, mqttPort);
   client.setCallback(mqttCallback);
 
+  int attempts = 0;
   while (!client.connected()) {
     lcdmsg("Connecting to MQTT");
+
+    // If we've tried 5 times to reconnect to MQTT then let's just reboot.
+    if (attempts == 5) {
+      ESP.restart();
+    }
 
     // The "offline" message here is the last will and testament
     if (client.connect(DEVICE_NAME""DEVICE_ID, mqttUser, mqttPass, statusTopic, 1, 1, "offline")) {
@@ -160,7 +175,8 @@ void setupMqtt() {
         client.loop();
         client.loop();
       }
-    } else {    
+    } else {
+      attempts++;
       lcdmsg("MQTT Failed");
       delay(500);
       // Something isn't right. Do a Wifi health check.
@@ -174,9 +190,9 @@ void setupMqtt() {
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   char* p = (char*)malloc(length + 1);
   // Copy the payload to the new buffer
-  memcpy(p,payload,length);
+  memcpy(p, payload, length);
   p[length] = '\0';
-  
+
   //lcdmsg(p);
   if (strcmp(topic, setCountTopic) == 0) {
     String a = "";
@@ -214,13 +230,13 @@ void lcdClearLine(int line) {
 
 void lcdmsg(String msg) {
   //lcdClearLine(0);
-  lcd.setCursor(0,0);
+  lcd.setCursor(0, 0);
   lcd.print(msg);
 }
 
 void lcd2(String msg) {
   //lcdClearLine(1);
-  lcd.setCursor(0,1);
+  lcd.setCursor(0, 1);
   lcd.print(msg);
 }
 
@@ -246,66 +262,157 @@ void setDisplayMode(int mode) {
 
 void publishCount() {
   String json = String("{");
-         json += "\"count_1\":";
-         json += numPulses;
-         json += ",\"relay_1\":";
-         if (relay1State == true) {
-            json += "\"ON\"";
-         } else {
-            json += "\"OFF\"";
-         }
-         json += "}";
+  json += "\"count_1\":";
+  json += numPulses;
+  json += ",\"relay_1\":";
+  if (relay1State == true) {
+    json += "\"ON\"";
+  } else {
+    json += "\"OFF\"";
+  }
+  json += "}";
 
-   char jsonChar[200];
-   json.toCharArray(jsonChar, 200);
-   client.publish(countTopic, jsonChar);
+  char jsonChar[200];
+  json.toCharArray(jsonChar, 200);
+  client.publish(countTopic, jsonChar);
 }
 
 double getFormattedSignalStrength() {
   if (WiFi.status() != WL_CONNECTED) {
-     return -1;
+    return -1;
   }
 
   int dBm = WiFi.RSSI();
   if (dBm <= -100) {
-     return 0;
+    return 0;
   }
   if (dBm >= -50) {
-     return 100;
+    return 100;
   }
   return 2 * (dBm + 100);
 }
 
 /**
- * Build and publish a JSON blob with all the attributes
- * of the device
- * Attributes:
- *   DEVICE_NAME
- *   DEVICE_ID
- *   IP address
- *   Wifi RSSI
- */
+   Build and publish a JSON blob with all the attributes
+   of the device
+   Attributes:
+     DEVICE_NAME
+     DEVICE_ID
+     IP address
+     Wifi RSSI
+*/
 void publishAttributes() {
   char ipStr[16];
   sprintf(ipStr, "%d.%d.%d.%d", WiFi.localIP()[0], WiFi.localIP()[1], WiFi.localIP()[2], WiFi.localIP()[3] );
 
   String json = String("{");
-         json += "\"device_name\":";
-         json += "\""DEVICE_NAME"\",";
-         json += "\"device_id\":";
-         json += "\""DEVICE_ID"\",";
-         json += "\"ip_address\":\"";
-         json += ipStr;
-         json += "\",\"signal_percent\":\"";
-         json += getFormattedSignalStrength();
-         json += "\"}";
+  json += "\"device_name\":";
+  json += "\""DEVICE_NAME"\",";
+  json += "\"device_id\":";
+  json += "\""DEVICE_ID"\",";
+  json += "\"ip_address\":\"";
+  json += ipStr;
+  json += "\",\"signal_percent\":\"";
+  json += getFormattedSignalStrength();
+  json += "\"}";
 
-   char jsonChar[200];
-   json.toCharArray(jsonChar, 200);
-   client.publish(jsonInfoTopic, jsonChar);
+  char jsonChar[200];
+  json.toCharArray(jsonChar, 200);
+  client.publish(jsonInfoTopic, jsonChar);
+}
+
+void serviceSerialPort() {
+  if (Serial.available() > 0) {
+    String command = Serial.readString();
+    command.trim();
+
+    if (command.equals("wifi")) {
+      Serial.write("\nwifi status\n");
+      String sig = "signal: ";
+      sig += getFormattedSignalStrength();
+      sig += "%\n";
+
+      if (WiFi.status() == WL_CONNECTED) {
+        sig += "connected\n";
+      } else if (WiFi.status() == WL_CONNECTION_LOST) {
+        sig += "connection lost\n";
+      } else if (WiFi.status() == WL_DISCONNECTED) {
+        sig += "disconnected\n";
+      }
+
+
+      byte s[sig.length()];
+      sig.getBytes(s, sig.length());
+      Serial.write(s, sig.length());
+
+
+    } else if (command.equals("mqtt")) {
+      Serial.write("\nmqtt status\n");
+
+      int state = client.state();
+      switch (state) {
+        case MQTT_CONNECTED:
+          Serial.write("MQTT: CONNECTED");
+          break;
+        case MQTT_CONNECTION_TIMEOUT:
+          Serial.write("MQTT: TIMEOUT");
+          break;
+        case MQTT_CONNECTION_LOST:
+          Serial.write("MQTT: CONN LOSS");
+          break;
+        case MQTT_CONNECT_FAILED:
+          Serial.write("MQTT: CONN FAIL");
+          break;
+        case MQTT_DISCONNECTED:
+          Serial.write("MQTT: DISCONNECTED");
+          break;
+        case MQTT_CONNECT_BAD_PROTOCOL:
+          Serial.write("MQTT: BAD PROTO");
+          break;
+        case MQTT_CONNECT_BAD_CLIENT_ID:
+          Serial.write("MQTT: BAD ID");
+          break;
+        case MQTT_CONNECT_UNAVAILABLE:
+          Serial.write("MQTT: UNAVAILABLE");
+          break;
+        case MQTT_CONNECT_BAD_CREDENTIALS:
+          Serial.write("MQTT: BAD CREDS");
+          break;
+        case MQTT_CONNECT_UNAUTHORIZED:
+          Serial.write("MQTT: UNAUTH");
+          break;
+      }
+
+      Serial.write("\n");
+    } else if (command.equals("count+")) {
+      numPulses++;
+      publishCount();
+    } else if (command.equals("count-")) {
+      numPulses--;
+      publishCount();
+    } else if (command.equals("dm")) {
+      nextDisplayMode();
+
+      // Reset the backlight timeout.
+      lastUserInteraction = timeClient.getEpochTime();
+      lastDisplayModeChange = timeClient.getEpochTime();
+      // Pause auto increment
+      pauseAutoIncrement = 1;
+    } else if (command.equals("relay1 on")) {
+      relay1State = true;
+      publishCount();
+    } else if (command.equals("relay1 off")) {
+      relay1State = false;
+      publishCount();
+    }
+  }
 }
 
 void loop() {
+
+  ArduinoOTA.handle();
+
+  serviceSerialPort();
 
   // Handle queued interrupts for pulses
   if (rawPulseCounter > 0) {
@@ -325,7 +432,7 @@ void loop() {
     // Pause auto increment
     pauseAutoIncrement = 1;
   }
-  
+
   // Check wifi health and re-join if we need to
   if (WiFi.status() != WL_CONNECTED) {
     setupWifi();
@@ -365,6 +472,10 @@ void loop() {
       char ipStr[16];
       sprintf(ipStr, "%d.%d.%d.%d", WiFi.localIP()[0], WiFi.localIP()[1], WiFi.localIP()[2], WiFi.localIP()[3] );
       lcd2(ipStr);
+    } else if (WiFi.status() == WL_CONNECTION_LOST) {
+      lcdmsg("WIFI: CONN LOST");
+    } else if (WiFi.status() == WL_DISCONNECTED) {
+      lcdmsg("WIFI: Disconnect");
     } else {
       lcdmsg("WIFI: ERROR");
     }
@@ -378,34 +489,34 @@ void loop() {
       case MQTT_CONNECTED:
         lcdmsg("MQTT: CONNECTED");
         lcd2(subscribeTopic);
-      break;
+        break;
       case MQTT_CONNECTION_TIMEOUT:
         lcdmsg("MQTT: TIMEOUT");
-      break;
+        break;
       case MQTT_CONNECTION_LOST:
         lcdmsg("MQTT: CONN LOSS");
-      break;
+        break;
       case MQTT_CONNECT_FAILED:
         lcdmsg("MQTT: CONN FAIL");
-      break;
+        break;
       case MQTT_DISCONNECTED:
         lcdmsg("MQTT: DISCONNECTED");
-      break;
+        break;
       case MQTT_CONNECT_BAD_PROTOCOL:
         lcdmsg("MQTT: BAD PROTO");
-      break;
+        break;
       case MQTT_CONNECT_BAD_CLIENT_ID:
         lcdmsg("MQTT: BAD ID");
-      break;
+        break;
       case MQTT_CONNECT_UNAVAILABLE:
         lcdmsg("MQTT: UNAVAILABLE");
-      break;
+        break;
       case MQTT_CONNECT_BAD_CREDENTIALS:
         lcdmsg("MQTT: BAD CREDS");
-      break;
+        break;
       case MQTT_CONNECT_UNAUTHORIZED:
         lcdmsg("MQTT: UNAUTH");
-      break;      
+        break;
     }
   }
 
@@ -439,15 +550,15 @@ void loop() {
 
   // Check if it's time for a healthcheck
   if (timeClient.getEpochTime() - lastHealthcheck >= HEALTHCHECK_TIMEOUT) {
-     client.publish(statusTopic, "online");
-     publishCount();
-     lastHealthcheck = timeClient.getEpochTime();
+    client.publish(statusTopic, "online");
+    publishCount();
+    lastHealthcheck = timeClient.getEpochTime();
   }
 
   // Check if the relay needs to be turned on or off
   if (relay1State == true) {
-      digitalWrite(relay1Pin, HIGH);
+    digitalWrite(relay1Pin, HIGH);
   } else {
-      digitalWrite(relay1Pin, LOW);
+    digitalWrite(relay1Pin, LOW);
   }
 }
